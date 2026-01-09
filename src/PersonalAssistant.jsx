@@ -11,20 +11,27 @@ const plugins = {
     description: 'Take and manage notes',
     execute: async (params, context) => {
       const { action, content, supabase } = params;
-      
+
       if (action === 'create') {
+        // Validate content is not empty
+        if (!content || !content.trim()) {
+          return { success: false, message: "What would you like me to note down?" };
+        }
+
+        const trimmedContent = content.trim();
+
         if (supabase) {
           const { data, error } = await supabase
             .from('assistant_notes')
-            .insert({ content, created_at: new Date().toISOString() });
+            .insert({ content: trimmedContent, created_at: new Date().toISOString() });
           if (error) throw error;
-          return { success: true, message: `Note saved: "${content}"` };
+          return { success: true, message: `Note saved: "${trimmedContent}"` };
         }
         // Fallback to local storage
         const notes = JSON.parse(localStorage.getItem('assistant_notes') || '[]');
-        notes.push({ id: Date.now(), content, created_at: new Date().toISOString() });
+        notes.push({ id: Date.now(), content: trimmedContent, created_at: new Date().toISOString() });
         localStorage.setItem('assistant_notes', JSON.stringify(notes));
-        return { success: true, message: `Note saved: "${content}"` };
+        return { success: true, message: `Note saved: "${trimmedContent}"` };
       }
       
       if (action === 'list') {
@@ -68,15 +75,74 @@ const plugins = {
   search: {
     name: 'Web Search',
     icon: '🔍',
-    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is'],
-    description: 'Search the web',
+    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about'],
+    description: 'Search the web using Tavily',
     execute: async (params) => {
-      // Placeholder - integrate with search API
-      return { 
-        success: true, 
-        message: `Search capability ready. Query: "${params.query}"`,
-        needsIntegration: true 
-      };
+      const { query, supabase } = params;
+      const tavilyApiKey = import.meta.env.VITE_TAVILY_API_KEY;
+
+      if (!tavilyApiKey) {
+        return {
+          success: false,
+          message: 'Web search is not configured. Please add VITE_TAVILY_API_KEY to your .env file.'
+        };
+      }
+
+      if (!query || !query.trim()) {
+        return { success: false, message: 'What would you like me to search for?' };
+      }
+
+      try {
+        const response = await fetch('https://api.tavily.com/search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            api_key: tavilyApiKey,
+            query: query.trim(),
+            search_depth: 'basic',
+            include_answer: true,
+            include_raw_content: false,
+            max_results: 5
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Search failed: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+
+        // Save search to database for history
+        if (supabase) {
+          await supabase.from('assistant_searches').insert({
+            query: query.trim(),
+            results: data,
+            source: 'tavily'
+          });
+        }
+
+        // Format the response
+        let message = '';
+
+        if (data.answer) {
+          message = `**Answer:** ${data.answer}\n\n`;
+        }
+
+        if (data.results && data.results.length > 0) {
+          message += '**Sources:**\n';
+          data.results.slice(0, 3).forEach((result, i) => {
+            message += `${i + 1}. ${result.title}\n   ${result.url}\n`;
+          });
+        }
+
+        return {
+          success: true,
+          message: message || 'No results found.',
+          data: data
+        };
+      } catch (error) {
+        return { success: false, message: `Search error: ${error.message}` };
+      }
     }
   },
   
@@ -212,14 +278,112 @@ const plugins = {
   text: {
     name: 'Text Message',
     icon: '💬',
-    keywords: ['text', 'sms', 'message'],
-    description: 'Send text messages',
+    keywords: ['text', 'sms', 'message', 'send text'],
+    description: 'Send text messages via Twilio',
     execute: async (params) => {
-      // Placeholder - integrate with Twilio
+      const { action, to, body, phone, message, supabase } = params;
+
+      // Handle different param names
+      const phoneNumber = to || phone;
+      const messageBody = body || message;
+
+      if (action === 'send' || (!action && phoneNumber)) {
+        if (!phoneNumber) {
+          return { success: false, message: 'Who would you like to text? Please provide a phone number.' };
+        }
+        if (!messageBody) {
+          return { success: false, message: 'What would you like to say?' };
+        }
+
+        try {
+          // Call the Netlify function to send SMS
+          const response = await fetch('/.netlify/functions/send-sms', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              to: phoneNumber,
+              body: messageBody
+            })
+          });
+
+          const data = await response.json();
+
+          if (!response.ok) {
+            throw new Error(data.error || 'Failed to send SMS');
+          }
+
+          // Save to database for conversation history
+          if (supabase) {
+            // Find or create conversation
+            let { data: convData } = await supabase
+              .from('sms_conversations')
+              .select('id')
+              .eq('phone_number', phoneNumber)
+              .single();
+
+            if (!convData) {
+              const { data: newConv } = await supabase
+                .from('sms_conversations')
+                .insert({ phone_number: phoneNumber })
+                .select('id')
+                .single();
+              convData = newConv;
+            }
+
+            if (convData) {
+              await supabase.from('sms_messages').insert({
+                conversation_id: convData.id,
+                direction: 'outbound',
+                body: messageBody,
+                status: 'sent',
+                twilio_sid: data.sid
+              });
+            }
+          }
+
+          return {
+            success: true,
+            message: `✅ Text sent to ${phoneNumber}: "${messageBody}"`,
+            data: data
+          };
+        } catch (error) {
+          return { success: false, message: `Failed to send text: ${error.message}` };
+        }
+      }
+
+      if (action === 'history') {
+        if (!supabase) {
+          return { success: false, message: 'Database not connected for message history.' };
+        }
+
+        try {
+          const { data: messages, error } = await supabase
+            .from('sms_messages')
+            .select('*, sms_conversations(phone_number)')
+            .order('created_at', { ascending: false })
+            .limit(10);
+
+          if (error) throw error;
+
+          if (!messages || messages.length === 0) {
+            return { success: true, message: 'No text message history yet.' };
+          }
+
+          const history = messages.map(m => {
+            const dir = m.direction === 'outbound' ? '→' : '←';
+            const phone = m.sms_conversations?.phone_number || 'Unknown';
+            return `${dir} ${phone}: ${m.body}`;
+          }).join('\n');
+
+          return { success: true, message: `Recent texts:\n${history}` };
+        } catch (error) {
+          return { success: false, message: `Error fetching history: ${error.message}` };
+        }
+      }
+
       return {
         success: true,
-        message: `SMS capability ready.`,
-        needsIntegration: true
+        message: 'SMS is ready! Try: "text [phone number] [message]" or "show text history"'
       };
     }
   },
@@ -575,11 +739,56 @@ Always respond with valid JSON only.`;
             return { message: result.message, action: 'recording', data: result };
           }
 
-          // Placeholder responses for unintegrated plugins
-          return {
-            message: `${plugin.name} capability recognized. This feature is ready to be connected to ${plugin.name === 'Web Search' ? 'a search API' : plugin.name === 'Calendar' ? 'Google Calendar' : plugin.name === 'Email' ? 'Gmail/SendGrid' : 'Twilio'}.`,
-            action: key
-          };
+          if (key === 'search') {
+            // Extract query after search keywords
+            const query = userInput.replace(/^(search|look up|find|google|what is|who is|research|tell me about)[:\s]*/i, '').trim();
+            if (query) {
+              const result = await plugin.execute({ query, supabase: supabaseClient });
+              return { message: result.message, action: 'search', data: result.data };
+            }
+            return { message: "What would you like me to search for?" };
+          }
+
+          if (key === 'text') {
+            if (lowerInput.includes('history') || lowerInput.includes('show text') || lowerInput.includes('text history')) {
+              const result = await plugin.execute({ action: 'history', supabase: supabaseClient });
+              return { message: result.message, action: 'text', data: result };
+            }
+
+            // Try to extract phone number and message: "text 555-1234 hello there"
+            const textMatch = userInput.match(/^(?:text|sms|message)\s+([\d\-\+\(\)\s]+)\s+(.+)$/i);
+            if (textMatch) {
+              const phone = textMatch[1].trim();
+              const message = textMatch[2].trim();
+              const result = await plugin.execute({
+                action: 'send',
+                to: phone,
+                body: message,
+                supabase: supabaseClient
+              });
+              return { message: result.message, action: 'text', data: result };
+            }
+
+            return { message: "To send a text, say: text [phone number] [message]" };
+          }
+
+          if (key === 'calendar') {
+            const result = await plugin.execute({ action: 'list' });
+            return { message: result.message, action: 'calendar', data: result };
+          }
+
+          if (key === 'email') {
+            if (lowerInput.includes('check') || lowerInput.includes('inbox') || lowerInput.includes('read')) {
+              const result = await plugin.execute({ action: 'inbox' });
+              return { message: result.message, action: 'email', data: result };
+            }
+            const result = await plugin.execute({});
+            return { message: result.message, action: 'email', data: result };
+          }
+
+          // Generic plugin response
+          const result = await plugin.execute({ supabase: supabaseClient });
+          return { message: result.message, action: key, data: result };
         }
       }
     }

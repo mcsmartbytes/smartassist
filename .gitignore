@@ -1,2 +1,21 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
 # Local Netlify folder
-.netlify
+.netlify/
+
+# Environment variables (contains secrets)
+.env
+.env.local
+.env.*.local
+
+# Editor directories
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
