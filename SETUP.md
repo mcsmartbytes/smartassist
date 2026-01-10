@@ -19,7 +19,7 @@ SmartAssist uses Supabase for persistent storage of notes, reminders, search his
 ### Steps:
 
 1. Go to your Supabase project SQL Editor:
-   https://supabase.com/dashboard/project/kktxfbmlmajmbmwxocvn/sql
+   https://supabase.com/dashboard/project/rsslcigkqdezjngewtbf/sql
 
 2. Copy and paste the entire contents of `setup-database.sql`
 

@@ -1,5 +1,5 @@
 -- SmartAssist Database Setup
--- Run this in Supabase SQL Editor: https://supabase.com/dashboard/project/kktxfbmlmajmbmwxocvn/sql
+-- Run this in Supabase SQL Editor: https://supabase.com/dashboard/project/rsslcigkqdezjngewtbf/sql
 
 -- =====================================================
 -- NOTES
@@ -106,29 +106,40 @@ CREATE INDEX IF NOT EXISTS idx_sms_messages_conv ON sms_messages(conversation_id
 
 -- Notes
 ALTER TABLE assistant_notes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "notes_public_all" ON assistant_notes;
+DROP POLICY IF EXISTS "Allow public insert" ON assistant_notes;
+DROP POLICY IF EXISTS "Allow public read" ON assistant_notes;
 CREATE POLICY "notes_public_all" ON assistant_notes FOR ALL USING (true) WITH CHECK (true);
 
 -- Reminders
 ALTER TABLE assistant_reminders ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "reminders_public_all" ON assistant_reminders;
 CREATE POLICY "reminders_public_all" ON assistant_reminders FOR ALL USING (true) WITH CHECK (true);
 
 -- Contacts
 ALTER TABLE assistant_contacts ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "contacts_public_all" ON assistant_contacts;
 CREATE POLICY "contacts_public_all" ON assistant_contacts FOR ALL USING (true) WITH CHECK (true);
 
 -- Searches
 ALTER TABLE assistant_searches ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "searches_public_all" ON assistant_searches;
 CREATE POLICY "searches_public_all" ON assistant_searches FOR ALL USING (true) WITH CHECK (true);
 
 -- SMS
 ALTER TABLE sms_conversations ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "sms_conv_public_all" ON sms_conversations;
 CREATE POLICY "sms_conv_public_all" ON sms_conversations FOR ALL USING (true) WITH CHECK (true);
 
 ALTER TABLE sms_messages ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "sms_msg_public_all" ON sms_messages;
 CREATE POLICY "sms_msg_public_all" ON sms_messages FOR ALL USING (true) WITH CHECK (true);
 
 -- Recordings
 ALTER TABLE meeting_recordings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "recordings_public_all" ON meeting_recordings;
+DROP POLICY IF EXISTS "Allow public insert" ON meeting_recordings;
+DROP POLICY IF EXISTS "Allow public read" ON meeting_recordings;
 CREATE POLICY "recordings_public_all" ON meeting_recordings FOR ALL USING (true) WITH CHECK (true);
 
 -- =====================================================
@@ -137,6 +148,9 @@ CREATE POLICY "recordings_public_all" ON meeting_recordings FOR ALL USING (true)
 INSERT INTO storage.buckets (id, name, public)
 VALUES ('meeting-recordings', 'meeting-recordings', true)
 ON CONFLICT (id) DO NOTHING;
+
+DROP POLICY IF EXISTS "Allow public uploads" ON storage.objects;
+DROP POLICY IF EXISTS "Allow public reads" ON storage.objects;
 
 CREATE POLICY "Allow public uploads" ON storage.objects
   FOR INSERT WITH CHECK (bucket_id = 'meeting-recordings');
