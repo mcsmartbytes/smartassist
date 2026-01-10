@@ -431,32 +431,73 @@ const useVoiceRecognition = () => {
   const [isSupported, setIsSupported] = useState(false);
   const recognitionRef = useRef(null);
 
+  const silenceTimeoutRef = useRef(null);
+  const lastSpeechTimeRef = useRef(null);
+
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
       if (SpeechRecognition) {
         setIsSupported(true);
         recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = false;
+        recognitionRef.current.continuous = true;
         recognitionRef.current.interimResults = true;
         recognitionRef.current.lang = 'en-US';
 
         recognitionRef.current.onresult = (event) => {
-          const current = event.resultIndex;
-          const result = event.results[current];
-          setTranscript(result[0].transcript);
+          let finalTranscript = '';
+          let interimTranscript = '';
+
+          for (let i = event.resultIndex; i < event.results.length; i++) {
+            const result = event.results[i];
+            if (result.isFinal) {
+              finalTranscript += result[0].transcript;
+            } else {
+              interimTranscript += result[0].transcript;
+            }
+          }
+
+          // Update transcript with final + interim
+          setTranscript(prev => {
+            const newTranscript = finalTranscript || interimTranscript;
+            return finalTranscript ? (prev + ' ' + finalTranscript).trim() : (prev.split(' ').slice(0, -interimTranscript.split(' ').length).join(' ') + ' ' + interimTranscript).trim() || newTranscript;
+          });
+
+          // Reset silence timer on each speech input
+          lastSpeechTimeRef.current = Date.now();
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+          }
+          // Auto-stop after 3 seconds of silence
+          silenceTimeoutRef.current = setTimeout(() => {
+            if (recognitionRef.current && Date.now() - lastSpeechTimeRef.current >= 3000) {
+              recognitionRef.current.stop();
+            }
+          }, 3000);
         };
 
         recognitionRef.current.onend = () => {
           setIsListening(false);
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+          }
         };
 
         recognitionRef.current.onerror = (event) => {
           console.error('Speech recognition error:', event.error);
           setIsListening(false);
+          if (silenceTimeoutRef.current) {
+            clearTimeout(silenceTimeoutRef.current);
+          }
         };
       }
     }
+
+    return () => {
+      if (silenceTimeoutRef.current) {
+        clearTimeout(silenceTimeoutRef.current);
+      }
+    };
   }, []);
 
   const startListening = useCallback(() => {
