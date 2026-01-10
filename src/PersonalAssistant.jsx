@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import MicrosoftGraph from './microsoftGraph.js';
 import MeetingRecorder from './MeetingRecorder.jsx';
+import { processWithAI as processWithContextAI } from './aiService.js';
 
 // Plugin registry - add new capabilities here
 const plugins = {
@@ -845,12 +846,12 @@ export default function PersonalAssistant({
 
     try {
       let response;
-      
-      if (openaiApiKey) {
-        // Use OpenAI API to understand intent, answer questions, and route to plugins
-        response = await processWithAI(userInput, openaiApiKey);
-      } else {
-        // Fallback: Simple keyword matching
+
+      // Try AI-powered processing first (uses OpenAI or Anthropic if available)
+      response = await processWithAI(userInput);
+
+      // Fall back to keyword matching if AI not available or failed
+      if (!response) {
         response = await processWithKeywords(userInput);
       }
 
@@ -890,59 +891,83 @@ export default function PersonalAssistant({
     }
   };
 
-  // AI-powered processing (OpenAI)
-  const processWithAI = async (userInput, apiKey) => {
-    const systemPrompt = `You are a helpful personal assistant. You can help with tasks and answer questions.
+  // AI-powered processing with context awareness
+  const processWithAI = async (userInput) => {
+    // Try the context-aware AI service
+    const aiResult = await processWithContextAI(userInput, supabaseClient);
 
-Available capabilities: ${activePlugins.join(', ')}
-
-For TASKS (notes, reminders, calendar, email, recording), respond in JSON:
-{"capability": "notes|reminders|calendar|email|recording", "action": "create|list|etc", "params": {}, "response": "your message"}
-
-For QUESTIONS or CONVERSATION, respond in JSON:
-{"capability": "general", "response": "your helpful answer"}
-
-Always respond with valid JSON only.`;
-
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4o-mini',
-        max_tokens: 1024,
-        messages: [
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userInput }
-        ]
-      })
-    });
-
-    if (!response.ok) {
-      throw new Error('AI processing failed');
+    if (!aiResult) {
+      return null; // Fall back to keyword matching
     }
 
-    const data = await response.json();
-    const aiResponse = JSON.parse(data.choices[0].message.content);
+    // Map AI actions to plugin executions
+    const actionMap = {
+      'note_create': { plugin: 'notes', action: 'create', paramKey: 'content' },
+      'note_list': { plugin: 'notes', action: 'list' },
+      'reminder_create': { plugin: 'reminders', action: 'create', paramKey: 'content' },
+      'reminder_list': { plugin: 'reminders', action: 'list' },
+      'task_create': { plugin: 'tasks', action: 'create', paramKey: 'content' },
+      'task_list': { plugin: 'tasks', action: 'list' },
+      'list_add': { plugin: 'lists', action: 'add' },
+      'list_show': { plugin: 'lists', action: 'show' },
+      'list_create': { plugin: 'lists', action: 'show' }, // Just show empty list
+      'search': { plugin: 'search', action: 'search', paramKey: 'query' },
+      'text_send': { plugin: 'text', action: 'send' },
+      'calendar_list': { plugin: 'calendar', action: 'list' },
+      'email_check': { plugin: 'email', action: 'inbox' },
+      'recording_start': { plugin: 'recording', action: 'start' },
+    };
 
-    // Execute the appropriate plugin
-    if (aiResponse.capability !== 'general' && plugins[aiResponse.capability]) {
-      const result = await plugins[aiResponse.capability].execute({
-        ...aiResponse.params,
-        action: aiResponse.action,
-        supabase: supabaseClient
-      });
-      
-      return {
-        message: aiResponse.response,
-        action: aiResponse.capability,
-        data: result
-      };
+    const mapping = actionMap[aiResult.action];
+
+    if (mapping && plugins[mapping.plugin]) {
+      try {
+        const pluginParams = {
+          action: mapping.action,
+          supabase: supabaseClient,
+          ...aiResult.params
+        };
+
+        // Map the main param if needed
+        if (mapping.paramKey && aiResult.params?.content) {
+          pluginParams[mapping.paramKey] = aiResult.params.content;
+        }
+
+        const result = await plugins[mapping.plugin].execute(pluginParams);
+
+        // Format list responses nicely
+        if (mapping.action === 'list' && result.success) {
+          if (result.tasks?.length) {
+            const tasksList = result.tasks.map(t => `• ${t.content}`).join('\n');
+            return { message: `Your tasks:\n${tasksList}`, action: mapping.plugin, data: result };
+          }
+          if (result.reminders?.length) {
+            const remindersList = result.reminders.map(r => `• ${r.content}`).join('\n');
+            return { message: `Your reminders:\n${remindersList}`, action: mapping.plugin, data: result };
+          }
+          if (result.notes?.length) {
+            const notesList = result.notes.map(n => `• ${n.content}`).join('\n');
+            return { message: `Your notes:\n${notesList}`, action: mapping.plugin, data: result };
+          }
+          if (result.items?.length) {
+            const itemsList = result.items.map(i => `• ${i.item}`).join('\n');
+            return { message: `${result.listName || 'List'}:\n${itemsList}`, action: mapping.plugin, data: result };
+          }
+        }
+
+        return {
+          message: result.message || aiResult.message,
+          action: mapping.plugin,
+          data: result
+        };
+      } catch (error) {
+        console.error('Plugin execution error:', error);
+        return { message: aiResult.message, action: aiResult.action };
+      }
     }
 
-    return { message: aiResponse.response };
+    // Return AI message for conversation or unknown actions
+    return { message: aiResult.message, action: aiResult.action };
   };
 
   // Keyword-based fallback processing
