@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SmartAssist - Offline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      text-align: center;
+      max-width: 400px;
+    }
+    .icon {
+      font-size: 64px;
+      margin-bottom: 24px;
+      opacity: 0.8;
+    }
+    h1 {
+      font-size: 24px;
+      margin-bottom: 16px;
+      color: #fff;
+    }
+    p {
+      font-size: 16px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+      opacity: 0.8;
+    }
+    .retry-btn {
+      background: #4f46e5;
+      color: white;
+      border: none;
+      padding: 12px 32px;
+      font-size: 16px;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .retry-btn:hover {
+      background: #4338ca;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="icon">&#128268;</div>
+    <h1>You're Offline</h1>
+    <p>SmartAssist needs an internet connection for most features. Please check your connection and try again.</p>
+    <button class="retry-btn" onclick="location.reload()">Try Again</button>
+  </div>
+</body>
+</html>
