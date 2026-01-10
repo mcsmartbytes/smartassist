@@ -58,17 +58,231 @@ const plugins = {
     keywords: ['remind', 'reminder', 'alert', 'notify', 'don\'t forget'],
     description: 'Set reminders',
     execute: async (params) => {
-      const { content, time } = params;
-      const reminders = JSON.parse(localStorage.getItem('assistant_reminders') || '[]');
-      const reminder = {
-        id: Date.now(),
-        content,
-        time: time || new Date(Date.now() + 3600000).toISOString(), // Default 1 hour
-        created_at: new Date().toISOString()
-      };
-      reminders.push(reminder);
-      localStorage.setItem('assistant_reminders', JSON.stringify(reminders));
-      return { success: true, message: `Reminder set: "${content}"` };
+      const { action, content, time, supabase } = params;
+
+      if (action === 'create') {
+        if (!content || !content.trim()) {
+          return { success: false, message: "What should I remind you about?" };
+        }
+
+        // Parse time from content (e.g., "in 30 minutes", "tomorrow", "at 3pm")
+        let remindAt = time || new Date(Date.now() + 3600000).toISOString(); // Default 1 hour
+
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_reminders')
+            .insert({
+              content: content.trim(),
+              remind_at: remindAt,
+              is_completed: false
+            });
+          if (error) throw error;
+          return { success: true, message: `⏰ Reminder set: "${content.trim()}"` };
+        }
+
+        // Fallback to localStorage
+        const reminders = JSON.parse(localStorage.getItem('assistant_reminders') || '[]');
+        reminders.push({ id: Date.now(), content: content.trim(), remind_at: remindAt, is_completed: false });
+        localStorage.setItem('assistant_reminders', JSON.stringify(reminders));
+        return { success: true, message: `⏰ Reminder set: "${content.trim()}"` };
+      }
+
+      if (action === 'list') {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_reminders')
+            .select('*')
+            .eq('is_completed', false)
+            .order('remind_at', { ascending: true })
+            .limit(10);
+          if (error) throw error;
+          return { success: true, reminders: data };
+        }
+        const reminders = JSON.parse(localStorage.getItem('assistant_reminders') || '[]');
+        return { success: true, reminders: reminders.filter(r => !r.is_completed).slice(0, 10) };
+      }
+
+      if (action === 'complete' && params.id) {
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_reminders')
+            .update({ is_completed: true, completed_at: new Date().toISOString() })
+            .eq('id', params.id);
+          if (error) throw error;
+          return { success: true, message: '✅ Reminder completed!' };
+        }
+      }
+
+      return { success: false, message: 'Unknown reminder action' };
+    }
+  },
+
+  tasks: {
+    name: 'Tasks',
+    icon: '✅',
+    keywords: ['task', 'todo', 'to-do', 'to do', 'add task', 'create task'],
+    description: 'Manage your task list',
+    execute: async (params) => {
+      const { action, content, priority, due, supabase } = params;
+
+      if (action === 'create') {
+        if (!content || !content.trim()) {
+          return { success: false, message: "What task would you like to add?" };
+        }
+
+        const task = {
+          content: content.trim(),
+          priority: priority || 'medium',
+          is_completed: false,
+          due_date: due || null,
+          created_at: new Date().toISOString()
+        };
+
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_tasks')
+            .insert(task);
+          if (error) throw error;
+          return { success: true, message: `✅ Task added: "${content.trim()}"` };
+        }
+
+        const tasks = JSON.parse(localStorage.getItem('assistant_tasks') || '[]');
+        tasks.push({ id: Date.now(), ...task });
+        localStorage.setItem('assistant_tasks', JSON.stringify(tasks));
+        return { success: true, message: `✅ Task added: "${content.trim()}"` };
+      }
+
+      if (action === 'list') {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_tasks')
+            .select('*')
+            .eq('is_completed', false)
+            .order('created_at', { ascending: false })
+            .limit(15);
+          if (error) throw error;
+          return { success: true, tasks: data };
+        }
+        const tasks = JSON.parse(localStorage.getItem('assistant_tasks') || '[]');
+        return { success: true, tasks: tasks.filter(t => !t.is_completed).slice(0, 15) };
+      }
+
+      if (action === 'complete' && params.id) {
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_tasks')
+            .update({ is_completed: true, completed_at: new Date().toISOString() })
+            .eq('id', params.id);
+          if (error) throw error;
+          return { success: true, message: '✅ Task completed!' };
+        }
+      }
+
+      if (action === 'delete' && params.id) {
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_tasks')
+            .delete()
+            .eq('id', params.id);
+          if (error) throw error;
+          return { success: true, message: '🗑️ Task deleted!' };
+        }
+      }
+
+      return { success: false, message: 'Unknown task action' };
+    }
+  },
+
+  lists: {
+    name: 'Lists',
+    icon: '📋',
+    keywords: ['list', 'shopping', 'groceries', 'shopping list', 'grocery list', 'packing list', 'add to list', 'buy'],
+    description: 'Create and manage lists',
+    execute: async (params) => {
+      const { action, listName, item, supabase } = params;
+
+      if (action === 'add') {
+        if (!item || !item.trim()) {
+          return { success: false, message: "What would you like to add to the list?" };
+        }
+
+        const list = listName || 'Shopping';
+
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_lists')
+            .insert({
+              list_name: list,
+              item: item.trim(),
+              is_checked: false
+            });
+          if (error) throw error;
+          return { success: true, message: `📋 Added "${item.trim()}" to ${list} list` };
+        }
+
+        const lists = JSON.parse(localStorage.getItem('assistant_lists') || '{}');
+        if (!lists[list]) lists[list] = [];
+        lists[list].push({ id: Date.now(), item: item.trim(), is_checked: false });
+        localStorage.setItem('assistant_lists', JSON.stringify(lists));
+        return { success: true, message: `📋 Added "${item.trim()}" to ${list} list` };
+      }
+
+      if (action === 'show') {
+        const list = listName || 'Shopping';
+
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_lists')
+            .select('*')
+            .eq('list_name', list)
+            .eq('is_checked', false)
+            .order('created_at', { ascending: true });
+          if (error) throw error;
+          return { success: true, listName: list, items: data };
+        }
+
+        const lists = JSON.parse(localStorage.getItem('assistant_lists') || '{}');
+        const items = (lists[list] || []).filter(i => !i.is_checked);
+        return { success: true, listName: list, items };
+      }
+
+      if (action === 'check' && params.id) {
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_lists')
+            .update({ is_checked: true })
+            .eq('id', params.id);
+          if (error) throw error;
+          return { success: true, message: '✓ Item checked off!' };
+        }
+      }
+
+      if (action === 'clear') {
+        const list = listName || 'Shopping';
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_lists')
+            .delete()
+            .eq('list_name', list)
+            .eq('is_checked', true);
+          if (error) throw error;
+          return { success: true, message: `🗑️ Cleared checked items from ${list} list` };
+        }
+      }
+
+      if (action === 'all') {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_lists')
+            .select('list_name')
+            .eq('is_checked', false);
+          if (error) throw error;
+          const uniqueLists = [...new Set(data.map(d => d.list_name))];
+          return { success: true, lists: uniqueLists };
+        }
+      }
+
+      return { success: false, message: 'Unknown list action' };
     }
   },
   
@@ -762,12 +976,67 @@ Always respond with valid JSON only.`;
           }
           
           if (key === 'reminders') {
-            const content = userInput.replace(/^(remind|reminder)[:\s]*/i, '').trim();
-            if (content) {
-              const result = await plugin.execute({ content });
-              return { message: result.message, action: 'reminders', data: result };
+            if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('my reminder')) {
+              const result = await plugin.execute({ action: 'list', supabase: supabaseClient });
+              if (result.reminders && result.reminders.length > 0) {
+                const remindersList = result.reminders.map(r => `• ${r.content}`).join('\n');
+                return { message: `Your reminders:\n${remindersList}`, action: 'reminders', data: result };
+              }
+              return { message: "You don't have any active reminders.", action: 'reminders' };
+            } else {
+              const content = userInput.replace(/^(remind|reminder|remind me|don't forget)[:\s]*/i, '').trim();
+              if (content) {
+                const result = await plugin.execute({ action: 'create', content, supabase: supabaseClient });
+                return { message: result.message, action: 'reminders', data: result };
+              }
+              return { message: "What should I remind you about?" };
             }
-            return { message: "What should I remind you about?" };
+          }
+
+          if (key === 'tasks') {
+            if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('my task') || lowerInput.includes('what')) {
+              const result = await plugin.execute({ action: 'list', supabase: supabaseClient });
+              if (result.tasks && result.tasks.length > 0) {
+                const tasksList = result.tasks.map(t => `• ${t.content}`).join('\n');
+                return { message: `Your tasks:\n${tasksList}`, action: 'tasks', data: result };
+              }
+              return { message: "You don't have any tasks. Try saying 'add task buy groceries'", action: 'tasks' };
+            } else {
+              const content = userInput.replace(/^(task|todo|to-do|to do|add task|create task)[:\s]*/i, '').trim();
+              if (content) {
+                const result = await plugin.execute({ action: 'create', content, supabase: supabaseClient });
+                return { message: result.message, action: 'tasks', data: result };
+              }
+              return { message: "What task would you like to add?" };
+            }
+          }
+
+          if (key === 'lists') {
+            // Show shopping list or specific list
+            if (lowerInput.includes('show') || lowerInput.includes('what\'s on') || lowerInput.includes('whats on')) {
+              // Check for specific list name
+              const listMatch = userInput.match(/(?:show|what's on|whats on)\s+(?:my\s+)?(\w+)\s+list/i);
+              const listName = listMatch ? listMatch[1].charAt(0).toUpperCase() + listMatch[1].slice(1) : 'Shopping';
+
+              const result = await plugin.execute({ action: 'show', listName, supabase: supabaseClient });
+              if (result.items && result.items.length > 0) {
+                const itemsList = result.items.map(i => `• ${i.item}`).join('\n');
+                return { message: `${result.listName} list:\n${itemsList}`, action: 'lists', data: result };
+              }
+              return { message: `Your ${result.listName} list is empty.`, action: 'lists' };
+            }
+
+            // Add item to list: "add milk to shopping list" or "buy milk" or "add eggs to grocery list"
+            const addMatch = userInput.match(/(?:add|put|buy)\s+(.+?)(?:\s+(?:to|on)\s+(?:my\s+)?(\w+)\s+list)?$/i);
+            if (addMatch) {
+              const item = addMatch[1].trim();
+              let listName = addMatch[2] ? addMatch[2].charAt(0).toUpperCase() + addMatch[2].slice(1) : 'Shopping';
+
+              const result = await plugin.execute({ action: 'add', item, listName, supabase: supabaseClient });
+              return { message: result.message, action: 'lists', data: result };
+            }
+
+            return { message: "Try: 'add milk to shopping list' or 'show my shopping list'" };
           }
 
           if (key === 'recording') {

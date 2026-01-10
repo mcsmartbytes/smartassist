@@ -29,6 +29,30 @@ CREATE TABLE IF NOT EXISTS assistant_reminders (
 );
 
 -- =====================================================
+-- TASKS (todo items)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS assistant_tasks (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  content TEXT NOT NULL,
+  priority TEXT DEFAULT 'medium', -- 'low', 'medium', 'high'
+  is_completed BOOLEAN DEFAULT false,
+  due_date TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  completed_at TIMESTAMPTZ
+);
+
+-- =====================================================
+-- LISTS (shopping, packing, etc.)
+-- =====================================================
+CREATE TABLE IF NOT EXISTS assistant_lists (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  list_name TEXT NOT NULL DEFAULT 'Shopping',
+  item TEXT NOT NULL,
+  is_checked BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- =====================================================
 -- CONTACTS (for quick SMS/Email lookup)
 -- =====================================================
 CREATE TABLE IF NOT EXISTS assistant_contacts (
@@ -94,6 +118,11 @@ CREATE TABLE IF NOT EXISTS meeting_recordings (
 CREATE INDEX IF NOT EXISTS idx_notes_created ON assistant_notes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_reminders_remind_at ON assistant_reminders(remind_at);
 CREATE INDEX IF NOT EXISTS idx_reminders_completed ON assistant_reminders(is_completed);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON assistant_tasks(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_completed ON assistant_tasks(is_completed);
+CREATE INDEX IF NOT EXISTS idx_tasks_due ON assistant_tasks(due_date);
+CREATE INDEX IF NOT EXISTS idx_lists_name ON assistant_lists(list_name);
+CREATE INDEX IF NOT EXISTS idx_lists_checked ON assistant_lists(is_checked);
 CREATE INDEX IF NOT EXISTS idx_contacts_name ON assistant_contacts(name);
 CREATE INDEX IF NOT EXISTS idx_contacts_nickname ON assistant_contacts(nickname);
 CREATE INDEX IF NOT EXISTS idx_searches_created ON assistant_searches(created_at DESC);
@@ -115,6 +144,16 @@ CREATE POLICY "notes_public_all" ON assistant_notes FOR ALL USING (true) WITH CH
 ALTER TABLE assistant_reminders ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "reminders_public_all" ON assistant_reminders;
 CREATE POLICY "reminders_public_all" ON assistant_reminders FOR ALL USING (true) WITH CHECK (true);
+
+-- Tasks
+ALTER TABLE assistant_tasks ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "tasks_public_all" ON assistant_tasks;
+CREATE POLICY "tasks_public_all" ON assistant_tasks FOR ALL USING (true) WITH CHECK (true);
+
+-- Lists
+ALTER TABLE assistant_lists ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "lists_public_all" ON assistant_lists;
+CREATE POLICY "lists_public_all" ON assistant_lists FOR ALL USING (true) WITH CHECK (true);
 
 -- Contacts
 ALTER TABLE assistant_contacts ENABLE ROW LEVEL SECURITY;
