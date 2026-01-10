@@ -1012,31 +1012,50 @@ Always respond with valid JSON only.`;
           }
 
           if (key === 'lists') {
-            // Show shopping list or specific list
+            // Create a new list: "make a list called app ideas" or "create app ideas list"
+            const createMatch = userInput.match(/(?:make|create|start)\s+(?:a\s+)?(?:new\s+)?list\s+(?:called|named)\s+(.+)/i) ||
+                               userInput.match(/(?:make|create|start)\s+(?:a\s+)?(?:new\s+)?(.+?)\s+list$/i);
+            if (createMatch) {
+              const listName = createMatch[1].trim();
+              return {
+                message: `📋 Created "${listName}" list. Now you can say "add [item] to ${listName} list"`,
+                action: 'lists'
+              };
+            }
+
+            // Show list: "show my app ideas list" or "show app ideas"
             if (lowerInput.includes('show') || lowerInput.includes('what\'s on') || lowerInput.includes('whats on')) {
-              // Check for specific list name
-              const listMatch = userInput.match(/(?:show|what's on|whats on)\s+(?:my\s+)?(\w+)\s+list/i);
-              const listName = listMatch ? listMatch[1].charAt(0).toUpperCase() + listMatch[1].slice(1) : 'Shopping';
+              // Match multi-word list names
+              const listMatch = userInput.match(/(?:show|what's on|whats on)\s+(?:my\s+)?(.+?)\s*list$/i) ||
+                               userInput.match(/(?:show|what's on|whats on)\s+(?:my\s+)?(.+)$/i);
+              const listName = listMatch ? listMatch[1].trim() : 'Shopping';
 
               const result = await plugin.execute({ action: 'show', listName, supabase: supabaseClient });
               if (result.items && result.items.length > 0) {
                 const itemsList = result.items.map(i => `• ${i.item}`).join('\n');
                 return { message: `${result.listName} list:\n${itemsList}`, action: 'lists', data: result };
               }
-              return { message: `Your ${result.listName} list is empty.`, action: 'lists' };
+              return { message: `Your ${result.listName} list is empty. Add items with "add [item] to ${result.listName} list"`, action: 'lists' };
             }
 
-            // Add item to list: "add milk to shopping list" or "buy milk" or "add eggs to grocery list"
-            const addMatch = userInput.match(/(?:add|put|buy)\s+(.+?)(?:\s+(?:to|on)\s+(?:my\s+)?(\w+)\s+list)?$/i);
-            if (addMatch) {
-              const item = addMatch[1].trim();
-              let listName = addMatch[2] ? addMatch[2].charAt(0).toUpperCase() + addMatch[2].slice(1) : 'Shopping';
-
+            // Add item to list: "add voice assistant to app ideas list" or "buy milk"
+            const addToListMatch = userInput.match(/(?:add|put)\s+(.+?)\s+(?:to|on)\s+(?:my\s+)?(.+?)\s*list$/i);
+            if (addToListMatch) {
+              const item = addToListMatch[1].trim();
+              const listName = addToListMatch[2].trim();
               const result = await plugin.execute({ action: 'add', item, listName, supabase: supabaseClient });
               return { message: result.message, action: 'lists', data: result };
             }
 
-            return { message: "Try: 'add milk to shopping list' or 'show my shopping list'" };
+            // Simple add/buy for shopping: "buy milk" or "add eggs"
+            const simpleAddMatch = userInput.match(/(?:add|put|buy)\s+(.+)$/i);
+            if (simpleAddMatch) {
+              const item = simpleAddMatch[1].trim();
+              const result = await plugin.execute({ action: 'add', item, listName: 'Shopping', supabase: supabaseClient });
+              return { message: result.message, action: 'lists', data: result };
+            }
+
+            return { message: "Try: 'make a list called app ideas', 'add milk to shopping list', or 'show my app ideas list'" };
           }
 
           if (key === 'recording') {
