@@ -648,6 +648,7 @@ const useVoiceRecognition = () => {
 
   const silenceTimeoutRef = useRef(null);
   const lastSpeechTimeRef = useRef(null);
+  const finalizedTextRef = useRef('');
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -655,28 +656,28 @@ const useVoiceRecognition = () => {
       if (SpeechRecognition) {
         setIsSupported(true);
         recognitionRef.current = new SpeechRecognition();
-        recognitionRef.current.continuous = true;
-        recognitionRef.current.interimResults = true;
+
+        // Disable continuous mode and interim results to prevent word duplication
+        recognitionRef.current.continuous = false;
+        recognitionRef.current.interimResults = false;  // Only get final result
         recognitionRef.current.lang = 'en-US';
 
         recognitionRef.current.onresult = (event) => {
-          let finalTranscript = '';
-          let interimTranscript = '';
+          // With interimResults=false, we only get one final result
+          let transcript = event.results[0][0].transcript.trim();
 
-          for (let i = event.resultIndex; i < event.results.length; i++) {
-            const result = event.results[i];
-            if (result.isFinal) {
-              finalTranscript += result[0].transcript;
-            } else {
-              interimTranscript += result[0].transcript;
+          // Deduplicate: check if the text is repeated (e.g., "hello hello" -> "hello")
+          const words = transcript.split(' ');
+          const halfLength = Math.floor(words.length / 2);
+          if (words.length >= 2 && words.length % 2 === 0) {
+            const firstHalf = words.slice(0, halfLength).join(' ');
+            const secondHalf = words.slice(halfLength).join(' ');
+            if (firstHalf.toLowerCase() === secondHalf.toLowerCase()) {
+              transcript = firstHalf;
             }
           }
 
-          // Update transcript with final + interim
-          setTranscript(prev => {
-            const newTranscript = finalTranscript || interimTranscript;
-            return finalTranscript ? (prev + ' ' + finalTranscript).trim() : (prev.split(' ').slice(0, -interimTranscript.split(' ').length).join(' ') + ' ' + interimTranscript).trim() || newTranscript;
-          });
+          setTranscript(transcript);
 
           // Reset silence timer on each speech input
           lastSpeechTimeRef.current = Date.now();
@@ -718,6 +719,7 @@ const useVoiceRecognition = () => {
   const startListening = useCallback(() => {
     if (recognitionRef.current && !isListening) {
       setTranscript('');
+      finalizedTextRef.current = ''; // Reset finalized text for new session
       recognitionRef.current.start();
       setIsListening(true);
     }
@@ -914,6 +916,8 @@ export default function PersonalAssistant({
       'search': { plugin: 'search', action: 'search', paramKey: 'query' },
       'text_send': { plugin: 'text', action: 'send' },
       'calendar_list': { plugin: 'calendar', action: 'list' },
+      'calendar_create': { plugin: 'calendar', action: 'create' },
+      'calendar_today': { plugin: 'calendar', action: 'today' },
       'email_check': { plugin: 'email', action: 'inbox' },
       'recording_start': { plugin: 'recording', action: 'start' },
     };
@@ -1147,9 +1151,35 @@ export default function PersonalAssistant({
       }
     }
     
-    // General conversation fallback
-    return { 
-      message: `I heard: "${userInput}". I can help you with: ${Object.values(plugins).map(p => p.name).join(', ')}. Try saying something like "Note: buy milk" or "Remind me to call John".`
+    // General conversation fallback - try to be helpful based on what they said
+    const lowerInput2 = userInput.toLowerCase();
+
+    // Try to understand common intents even without exact keywords
+    if (lowerInput2.includes('help') || lowerInput2.includes('what can you do')) {
+      return {
+        message: `I can help you with:\n• Notes - "Note: remember this"\n• Tasks - "Add task: buy groceries"\n• Reminders - "Remind me to call John"\n• Lists - "Add milk to shopping list"\n• Calendar - "Schedule meeting tomorrow at 2pm"\n• Search - "Search for weather today"\n• Text - "Text 555-1234 hello"\n\nJust tell me what you need!`
+      };
+    }
+
+    if (lowerInput2.includes('hello') || lowerInput2.includes('hi') || lowerInput2.includes('hey')) {
+      return { message: `Hello! How can I help you today?` };
+    }
+
+    if (lowerInput2.includes('thank')) {
+      return { message: `You're welcome! Let me know if you need anything else.` };
+    }
+
+    if (lowerInput2.includes('?')) {
+      // It's a question - encourage them to use search
+      return {
+        message: `I can search that for you! Try saying "Search: ${userInput.replace('?', '').trim()}"`,
+        action: 'suggestion'
+      };
+    }
+
+    // Default: assume they want to create a note or task
+    return {
+      message: `Would you like me to save that as a note? Just say "Note: ${userInput}" or "Task: ${userInput}"`
     };
   };
 
