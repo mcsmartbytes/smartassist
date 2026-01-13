@@ -3,6 +3,17 @@ import MicrosoftGraph from './microsoftGraph.js';
 import MeetingRecorder from './MeetingRecorder.jsx';
 import { processWithAI as processWithContextAI } from './aiService.js';
 
+// Helper function to get next occurrence of a weekday (0=Sunday, 1=Monday, etc.)
+const getNextWeekday = (targetDay) => {
+  const today = new Date();
+  const currentDay = today.getDay();
+  let daysUntil = targetDay - currentDay;
+  if (daysUntil <= 0) daysUntil += 7; // If today or past, go to next week
+  const result = new Date(today);
+  result.setDate(today.getDate() + daysUntil);
+  return result;
+};
+
 // Plugin registry - add new capabilities here
 const plugins = {
   notes: {
@@ -1131,6 +1142,54 @@ export default function PersonalAssistant({
           }
 
           if (key === 'calendar') {
+            // Check for create/add/schedule intent
+            if (lowerInput.includes('add') || lowerInput.includes('schedule') || lowerInput.includes('create') || lowerInput.includes('set up')) {
+              // Parse: "add meeting tomorrow at 2pm" or "schedule dentist appointment Friday at 3pm"
+              const timeMatch = userInput.match(/at\s+(\d{1,2}(?::\d{2})?\s*(?:am|pm)?)/i);
+              const time = timeMatch ? timeMatch[1] : '09:00';
+
+              // Parse date words
+              let date = new Date();
+              if (lowerInput.includes('tomorrow')) {
+                date.setDate(date.getDate() + 1);
+              } else if (lowerInput.includes('monday')) {
+                date = getNextWeekday(1);
+              } else if (lowerInput.includes('tuesday')) {
+                date = getNextWeekday(2);
+              } else if (lowerInput.includes('wednesday')) {
+                date = getNextWeekday(3);
+              } else if (lowerInput.includes('thursday')) {
+                date = getNextWeekday(4);
+              } else if (lowerInput.includes('friday')) {
+                date = getNextWeekday(5);
+              } else if (lowerInput.includes('saturday')) {
+                date = getNextWeekday(6);
+              } else if (lowerInput.includes('sunday')) {
+                date = getNextWeekday(0);
+              }
+
+              // Extract subject - remove common words
+              let subject = userInput
+                .replace(/add|schedule|create|set up|a|an|the|meeting|appointment|event|tomorrow|today|monday|tuesday|wednesday|thursday|friday|saturday|sunday|at\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?/gi, '')
+                .trim() || 'New Event';
+
+              const dateStr = date.toISOString().split('T')[0];
+              const result = await plugin.execute({
+                action: 'create',
+                subject: subject,
+                date: dateStr,
+                time: time
+              });
+              return { message: result.message, action: 'calendar', data: result };
+            }
+
+            // Check for today's events
+            if (lowerInput.includes('today') || lowerInput.includes("today's")) {
+              const result = await plugin.execute({ action: 'today' });
+              return { message: result.message, action: 'calendar', data: result };
+            }
+
+            // Default to list
             const result = await plugin.execute({ action: 'list' });
             return { message: result.message, action: 'calendar', data: result };
           }
@@ -1169,8 +1228,13 @@ export default function PersonalAssistant({
       return { message: `You're welcome! Let me know if you need anything else.` };
     }
 
-    if (lowerInput2.includes('?')) {
-      // It's a question - encourage them to use search
+    if (lowerInput2.includes('?') || lowerInput2.startsWith("what's") || lowerInput2.startsWith('what is') || lowerInput2.startsWith('who is') || lowerInput2.startsWith('how do') || lowerInput2.startsWith('where is')) {
+      // It's a question - auto-search if search plugin is available
+      if (activePlugins.includes('search') && plugins.search) {
+        const query = userInput.replace('?', '').trim();
+        const result = await plugins.search.execute({ query, supabase: supabaseClient });
+        return { message: result.message, action: 'search', data: result.data };
+      }
       return {
         message: `I can search that for you! Try saying "Search: ${userInput.replace('?', '').trim()}"`,
         action: 'suggestion'
