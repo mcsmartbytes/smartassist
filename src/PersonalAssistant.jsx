@@ -301,7 +301,7 @@ const plugins = {
   search: {
     name: 'Web Search',
     icon: '🔍',
-    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about'],
+    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about', "what's", 'weather', 'how do', 'how to', 'where is'],
     description: 'Search the web using Tavily',
     execute: async (params) => {
       const { query, supabase } = params;
@@ -375,7 +375,7 @@ const plugins = {
   calendar: {
     name: 'Calendar',
     icon: '📅',
-    keywords: ['calendar', 'schedule', 'event', 'meeting', 'appointment', 'busy', 'free', 'today'],
+    keywords: ['calendar', 'schedule', 'event', 'meeting', 'appointment', 'busy', 'free', 'today', 'add meeting', 'add appointment', 'add event'],
     description: 'Manage Outlook calendar events',
     requiresAuth: 'microsoft',
     execute: async (params) => {
