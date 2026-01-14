@@ -98,6 +98,8 @@ IMPORTANT: Respond with JSON in this exact format:
 Available actions and their params:
 - "note_create": { "content": "the note text" }
 - "note_list": {}
+- "note_delete": { "searchText": "text to match for deletion" } (omit searchText to delete last note)
+- "note_clear": {} (delete ALL notes - use with caution)
 - "reminder_create": { "content": "reminder text" }
 - "reminder_list": {}
 - "task_create": { "content": "task text", "priority": "low|medium|high" }

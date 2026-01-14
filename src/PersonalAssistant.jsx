@@ -20,7 +20,7 @@ const plugins = {
   notes: {
     name: 'Notes',
     icon: '📝',
-    keywords: ['note', 'remember', 'write down', 'save', 'jot'],
+    keywords: ['note', 'notes', 'remember', 'write down', 'save', 'jot', 'delete note', 'remove note', 'clear notes'],
     description: 'Take and manage notes',
     execute: async (params, context) => {
       const { action, content, supabase } = params;
@@ -59,6 +59,93 @@ const plugins = {
         }
         const notes = JSON.parse(localStorage.getItem('assistant_notes') || '[]');
         return { success: true, notes: notes.slice(-10).reverse() };
+      }
+
+      if (action === 'delete') {
+        const { noteId, searchText } = params;
+        
+        if (supabase) {
+          // Delete by ID if provided
+          if (noteId) {
+            const { error } = await supabase
+              .from('assistant_notes')
+              .delete()
+              .eq('id', noteId);
+            if (error) throw error;
+            return { success: true, message: '🗑️ Note deleted!' };
+          }
+          
+          // Delete by matching text content
+          if (searchText) {
+            const { data: matchingNotes } = await supabase
+              .from('assistant_notes')
+              .select('id, content')
+              .ilike('content', `%${searchText}%`)
+              .order('created_at', { ascending: false })
+              .limit(1);
+            
+            if (matchingNotes && matchingNotes.length > 0) {
+              const { error } = await supabase
+                .from('assistant_notes')
+                .delete()
+                .eq('id', matchingNotes[0].id);
+              if (error) throw error;
+              return { success: true, message: `🗑️ Deleted note: "${matchingNotes[0].content}"` };
+            }
+            return { success: false, message: `No note found containing "${searchText}"` };
+          }
+          
+          // Delete most recent note
+          const { data: recentNotes } = await supabase
+            .from('assistant_notes')
+            .select('id, content')
+            .order('created_at', { ascending: false })
+            .limit(1);
+          
+          if (recentNotes && recentNotes.length > 0) {
+            const { error } = await supabase
+              .from('assistant_notes')
+              .delete()
+              .eq('id', recentNotes[0].id);
+            if (error) throw error;
+            return { success: true, message: `🗑️ Deleted last note: "${recentNotes[0].content}"` };
+          }
+          return { success: false, message: 'No notes to delete.' };
+        }
+
+        // LocalStorage fallback
+        const notes = JSON.parse(localStorage.getItem('assistant_notes') || '[]');
+        if (notes.length === 0) {
+          return { success: false, message: 'No notes to delete.' };
+        }
+        
+        if (searchText) {
+          const index = notes.findIndex(n => n.content.toLowerCase().includes(searchText.toLowerCase()));
+          if (index >= 0) {
+            const deleted = notes.splice(index, 1)[0];
+            localStorage.setItem('assistant_notes', JSON.stringify(notes));
+            return { success: true, message: `🗑️ Deleted note: "${deleted.content}"` };
+          }
+          return { success: false, message: `No note found containing "${searchText}"` };
+        }
+        
+        // Delete most recent
+        const deleted = notes.pop();
+        localStorage.setItem('assistant_notes', JSON.stringify(notes));
+        return { success: true, message: `🗑️ Deleted last note: "${deleted.content}"` };
+      }
+
+      if (action === 'clear') {
+        if (supabase) {
+          const { error } = await supabase
+            .from('assistant_notes')
+            .delete()
+            .neq('id', 0); // Delete all
+          if (error) throw error;
+          return { success: true, message: '🗑️ All notes cleared!' };
+        }
+        localStorage.setItem('assistant_notes', '[]');
+        return { success: true, message: '🗑️ All notes cleared!' };
       }
       
       return { success: false, message: 'Unknown note action' };
@@ -1178,6 +1265,8 @@ export default function PersonalAssistant({
     const actionMap = {
       'note_create': { plugin: 'notes', action: 'create', paramKey: 'content' },
       'note_list': { plugin: 'notes', action: 'list' },
+      'note_delete': { plugin: 'notes', action: 'delete' },
+      'note_clear': { plugin: 'notes', action: 'clear' },
       'reminder_create': { plugin: 'reminders', action: 'create', paramKey: 'content', includeRawInput: true },
       'reminder_list': { plugin: 'reminders', action: 'list' },
       'task_create': { plugin: 'tasks', action: 'create', paramKey: 'content' },
@@ -1267,22 +1356,45 @@ export default function PersonalAssistant({
         if (lowerInput.includes(keyword)) {
           // Determine action based on input
           if (key === 'notes') {
-            if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('what')) {
+            // Show notes
+            if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('what are my')) {
               const result = await plugin.execute({ action: 'list', supabase: supabaseClient });
               if (result.notes && result.notes.length > 0) {
                 const notesList = result.notes.map(n => `• ${n.content}`).join('\n');
                 return { message: `Here are your recent notes:\n${notesList}`, action: 'notes', data: result };
               }
               return { message: "You don't have any notes yet.", action: 'notes' };
-            } else {
-              // Extract content after keyword
-              const content = userInput.replace(/^(note|remember|write down|save|jot)[:\s]*/i, '').trim();
-              if (content) {
-                const result = await plugin.execute({ action: 'create', content, supabase: supabaseClient });
-                return { message: result.message, action: 'notes', data: result };
-              }
-              return { message: "What would you like me to note down?" };
             }
+            
+            // Clear all notes
+            if (lowerInput.includes('clear all notes') || lowerInput.includes('delete all notes')) {
+              const result = await plugin.execute({ action: 'clear', supabase: supabaseClient });
+              return { message: result.message, action: 'notes', data: result };
+            }
+            
+            // Delete note: "delete note about groceries" or "delete last note" or "remove note"
+            if (lowerInput.includes('delete') || lowerInput.includes('remove')) {
+              const deleteMatch = userInput.match(/(?:delete|remove)\s+(?:the\s+)?(?:note\s+)?(?:about\s+)?(.+)/i);
+              if (deleteMatch) {
+                const searchText = deleteMatch[1].replace(/^(note|last note|my note)\s*/i, '').trim();
+                if (searchText && searchText !== 'note' && !searchText.match(/^(last|my|the)$/i)) {
+                  const result = await plugin.execute({ action: 'delete', searchText, supabase: supabaseClient });
+                  return { message: result.message, action: 'notes', data: result };
+                }
+              }
+              // Delete last note
+              const result = await plugin.execute({ action: 'delete', supabase: supabaseClient });
+              return { message: result.message, action: 'notes', data: result };
+            }
+            
+            // Create note (default)
+            // Extract content after keyword
+            const content = userInput.replace(/^(note|remember|write down|save|jot)[:\s]*/i, '').trim();
+            if (content) {
+              const result = await plugin.execute({ action: 'create', content, supabase: supabaseClient });
+              return { message: result.message, action: 'notes', data: result };
+            }
+            return { message: "What would you like me to note down?" };
           }
           
           if (key === 'reminders') {
