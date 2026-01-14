@@ -956,12 +956,12 @@ const useVoiceRecognition = () => {
           if (silenceTimeoutRef.current) {
             clearTimeout(silenceTimeoutRef.current);
           }
-          // Auto-stop after 3 seconds of silence
+          // Auto-stop after 5 seconds of silence (gives more time to think/speak)
           silenceTimeoutRef.current = setTimeout(() => {
-            if (recognitionRef.current && Date.now() - lastSpeechTimeRef.current >= 3000) {
+            if (recognitionRef.current && Date.now() - lastSpeechTimeRef.current >= 5000) {
               recognitionRef.current.stop();
             }
-          }, 3000);
+          }, 5000);
         };
 
         recognitionRef.current.onend = () => {
