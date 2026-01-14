@@ -436,7 +436,7 @@ const plugins = {
   search: {
     name: 'Web Search',
     icon: '🔍',
-    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about', "what's", 'weather', 'how do', 'how to', 'where is', 'near me', 'nearby'],
+    keywords: ['search for', 'search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about', "what's", 'weather', 'how do', 'how to', 'where is', 'near me', 'nearby', 'atm', 'restaurants', 'stores'],
     description: 'Search the web using Tavily',
     execute: async (params) => {
       const { query, supabase, userLocation } = params;
@@ -1532,7 +1532,10 @@ export default function PersonalAssistant({
 
           if (key === 'search') {
             // Extract query after search keywords
-            const query = userInput.replace(/^(search|look up|find|google|what is|who is|research|tell me about)[:\s]*/i, '').trim();
+            // Handle: "search for X", "search X", "look up X", "find X", "what is X", etc.
+            const query = userInput
+              .replace(/^(search\s+for|search|look\s+up|find|google|what\s+is|who\s+is|research|tell\s+me\s+about|what's|where\s+is|how\s+to|how\s+do\s+i|how\s+do)[:\s]*/i, '')
+              .trim();
             if (query) {
               const savedLocation = localStorage.getItem('smartassist_user_location') || '';
               const result = await plugin.execute({ query, supabase: supabaseClient, userLocation: savedLocation });
