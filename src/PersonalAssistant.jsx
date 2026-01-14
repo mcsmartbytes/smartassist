@@ -436,10 +436,10 @@ const plugins = {
   search: {
     name: 'Web Search',
     icon: '🔍',
-    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about', "what's", 'weather', 'how do', 'how to', 'where is'],
+    keywords: ['search', 'look up', 'find', 'google', 'what is', 'who is', 'research', 'tell me about', "what's", 'weather', 'how do', 'how to', 'where is', 'near me', 'nearby'],
     description: 'Search the web using Tavily',
     execute: async (params) => {
-      const { query, supabase } = params;
+      const { query, supabase, userLocation } = params;
       const tavilyApiKey = import.meta.env.VITE_TAVILY_API_KEY;
 
       if (!tavilyApiKey) {
@@ -453,13 +453,30 @@ const plugins = {
         return { success: false, message: 'What would you like me to search for?' };
       }
 
+      // Enhance query with location for "near me" searches
+      let enhancedQuery = query.trim();
+      const lowerQuery = enhancedQuery.toLowerCase();
+      
+      if (userLocation && (lowerQuery.includes('near me') || lowerQuery.includes('nearby') || lowerQuery.includes('around here'))) {
+        // Replace "near me" with actual location
+        enhancedQuery = enhancedQuery
+          .replace(/near me/gi, `in ${userLocation}`)
+          .replace(/nearby/gi, `in ${userLocation}`)
+          .replace(/around here/gi, `in ${userLocation}`);
+      } else if (userLocation && (lowerQuery.includes('weather') || lowerQuery.includes('local'))) {
+        // Add location to weather queries if not already specified
+        if (!lowerQuery.includes(' in ') && !lowerQuery.includes(' for ')) {
+          enhancedQuery = `${enhancedQuery} in ${userLocation}`;
+        }
+      }
+
       try {
         const response = await fetch('https://api.tavily.com/search', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             api_key: tavilyApiKey,
-            query: query.trim(),
+            query: enhancedQuery,
             search_depth: 'basic',
             include_answer: true,
             include_raw_content: false,
@@ -484,9 +501,14 @@ const plugins = {
 
         // Format the response
         let message = '';
+        
+        // Show if location was used
+        if (enhancedQuery !== query.trim()) {
+          message = `📍 Searching: "${enhancedQuery}"\n\n`;
+        }
 
         if (data.answer) {
-          message = `**Answer:** ${data.answer}\n\n`;
+          message += `**Answer:** ${data.answer}\n\n`;
         }
 
         if (data.results && data.results.length > 0) {
@@ -1117,7 +1139,11 @@ export default function PersonalAssistant({
   const [activePlugins, setActivePlugins] = useState(Object.keys(plugins));
   const [showSettings, setShowSettings] = useState(false);
   const [showRecorder, setShowRecorder] = useState(false);
+  const [showCommands, setShowCommands] = useState(false);
   const [microsoftUser, setMicrosoftUser] = useState(null);
+  const [userLocation, setUserLocation] = useState(() => {
+    return localStorage.getItem('smartassist_user_location') || '';
+  });
   const messagesEndRef = useRef(null);
   
   const { 
@@ -1274,7 +1300,7 @@ export default function PersonalAssistant({
       'list_add': { plugin: 'lists', action: 'add' },
       'list_show': { plugin: 'lists', action: 'show' },
       'list_create': { plugin: 'lists', action: 'show' }, // Just show empty list
-      'search': { plugin: 'search', action: 'search', paramKey: 'query' },
+      'search': { plugin: 'search', action: 'search', paramKey: 'query', includeLocation: true },
       'text_send': { plugin: 'text', action: 'send' },
       'calendar_list': { plugin: 'calendar', action: 'list' },
       'calendar_create': { plugin: 'calendar', action: 'create' },
@@ -1305,6 +1331,11 @@ export default function PersonalAssistant({
         // Include raw input for time parsing (e.g., reminders)
         if (mapping.includeRawInput) {
           pluginParams.rawInput = userInput;
+        }
+
+        // Include user location for search queries
+        if (mapping.includeLocation) {
+          pluginParams.userLocation = localStorage.getItem('smartassist_user_location') || '';
         }
 
         const result = await plugins[mapping.plugin].execute(pluginParams);
@@ -1503,7 +1534,8 @@ export default function PersonalAssistant({
             // Extract query after search keywords
             const query = userInput.replace(/^(search|look up|find|google|what is|who is|research|tell me about)[:\s]*/i, '').trim();
             if (query) {
-              const result = await plugin.execute({ query, supabase: supabaseClient });
+              const savedLocation = localStorage.getItem('smartassist_user_location') || '';
+              const result = await plugin.execute({ query, supabase: supabaseClient, userLocation: savedLocation });
               return { message: result.message, action: 'search', data: result.data };
             }
             return { message: "What would you like me to search for?" };
@@ -1703,11 +1735,12 @@ export default function PersonalAssistant({
       return { message: `You're welcome! Let me know if you need anything else.` };
     }
 
-    if (lowerInput2.includes('?') || lowerInput2.startsWith("what's") || lowerInput2.startsWith('what is') || lowerInput2.startsWith('who is') || lowerInput2.startsWith('how do') || lowerInput2.startsWith('where is')) {
+    if (lowerInput2.includes('?') || lowerInput2.startsWith("what's") || lowerInput2.startsWith('what is') || lowerInput2.startsWith('who is') || lowerInput2.startsWith('how do') || lowerInput2.startsWith('where is') || lowerInput2.includes('near me') || lowerInput2.includes('nearby')) {
       // It's a question - auto-search if search plugin is available
       if (activePlugins.includes('search') && plugins.search) {
         const query = userInput.replace('?', '').trim();
-        const result = await plugins.search.execute({ query, supabase: supabaseClient });
+        const savedLocation = localStorage.getItem('smartassist_user_location') || '';
+        const result = await plugins.search.execute({ query, supabase: supabaseClient, userLocation: savedLocation });
         return { message: result.message, action: 'search', data: result.data };
       }
       return {
@@ -1817,16 +1850,37 @@ export default function PersonalAssistant({
             🎙️ Record
           </button>
           <button
-            onClick={() => setShowSettings(!showSettings)}
+            onClick={() => setShowCommands(!showCommands)}
             style={{
-              background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+              background: showCommands 
+                ? 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)'
+                : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
               border: 'none',
               borderRadius: '10px',
               padding: '10px 16px',
-              color: 'inherit',
+              color: showCommands ? '#fff' : 'inherit',
               cursor: 'pointer',
               fontSize: '14px',
-              transition: 'all 0.2s'
+              transition: 'all 0.2s',
+              boxShadow: showCommands ? '0 4px 12px rgba(34, 197, 94, 0.3)' : 'none'
+            }}
+          >
+            📋 Commands
+          </button>
+          <button
+            onClick={() => setShowSettings(!showSettings)}
+            style={{
+              background: showSettings 
+                ? 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)'
+                : isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.05)',
+              border: 'none',
+              borderRadius: '10px',
+              padding: '10px 16px',
+              color: showSettings ? '#fff' : 'inherit',
+              cursor: 'pointer',
+              fontSize: '14px',
+              transition: 'all 0.2s',
+              boxShadow: showSettings ? '0 4px 12px rgba(99, 102, 241, 0.3)' : 'none'
             }}
           >
             ⚙️ Settings
@@ -1925,6 +1979,34 @@ export default function PersonalAssistant({
             </p>
           </div>
           
+          {/* Location Setting */}
+          <div style={{ marginBottom: '16px' }}>
+            <h3 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 600 }}>📍 Your Location</h3>
+            <input
+              type="text"
+              value={userLocation}
+              onChange={(e) => {
+                setUserLocation(e.target.value);
+                localStorage.setItem('smartassist_user_location', e.target.value);
+              }}
+              placeholder="Enter your city or address (e.g., Austin, TX)"
+              style={{
+                width: '100%',
+                maxWidth: '400px',
+                padding: '10px 14px',
+                borderRadius: '8px',
+                border: `1px solid ${isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.1)'}`,
+                background: isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                color: 'inherit',
+                fontSize: '14px',
+                outline: 'none'
+              }}
+            />
+            <p style={{ margin: '8px 0 0', fontSize: '11px', opacity: 0.5 }}>
+              Used for "near me" searches (e.g., "restaurants near me")
+            </p>
+          </div>
+
           <h3 style={{ margin: '0 0 12px', fontSize: '14px', fontWeight: 600 }}>Active Capabilities</h3>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
             {Object.entries(plugins).map(([key, plugin]) => (
@@ -1956,6 +2038,144 @@ export default function PersonalAssistant({
                 {plugin.icon} {plugin.name}
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Commands Reference Panel */}
+      {showCommands && (
+        <div style={{
+          padding: '16px 24px',
+          borderBottom: `1px solid ${isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.06)'}`,
+          background: isDark ? 'rgba(34, 197, 94, 0.05)' : 'rgba(34, 197, 94, 0.03)',
+          maxHeight: '60vh',
+          overflowY: 'auto'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+            <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>📋 Voice Commands Reference</h3>
+            <button
+              onClick={() => setShowCommands(false)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontSize: '18px',
+                opacity: 0.6
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px' }}>
+            {/* Notes */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>📝 Notes</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Note: buy milk"</li>
+                <li>"Show my notes"</li>
+                <li>"Delete note" or "Delete note about..."</li>
+                <li>"Clear all notes"</li>
+              </ul>
+            </div>
+
+            {/* Tasks */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>✅ Tasks</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Add task finish report"</li>
+                <li>"Show my tasks"</li>
+              </ul>
+            </div>
+
+            {/* Reminders */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>⏰ Reminders</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Remind me to call John"</li>
+                <li>"Remind me in 30 minutes..."</li>
+                <li>"Remind me tomorrow at 3pm..."</li>
+                <li>"Show my reminders"</li>
+              </ul>
+            </div>
+
+            {/* Lists */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>📋 Lists</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Add milk to shopping list"</li>
+                <li>"Make a list called app ideas"</li>
+                <li>"Show my shopping list"</li>
+              </ul>
+            </div>
+
+            {/* Contacts */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>👤 Contacts</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Add contact Mom phone 555-1234"</li>
+                <li>"Show my contacts"</li>
+                <li>"Find contact John"</li>
+                <li>"Delete contact John"</li>
+              </ul>
+            </div>
+
+            {/* SMS */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>💬 Text/SMS</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Text 555-123-4567 hello"</li>
+                <li>"Text Mom hello there"</li>
+                <li>"Show text history"</li>
+              </ul>
+            </div>
+
+            {/* Search */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>🔍 Web Search</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Search for best restaurants"</li>
+                <li>"Restaurants near me"</li>
+                <li>"What is TypeScript?"</li>
+              </ul>
+            </div>
+
+            {/* Calendar */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>📅 Calendar</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"What's on my calendar today?"</li>
+                <li>"Show upcoming events"</li>
+                <li>"Schedule meeting tomorrow at 2pm"</li>
+              </ul>
+              <p style={{ margin: '8px 0 0', fontSize: '11px', opacity: 0.5 }}>Requires Microsoft sign-in</p>
+            </div>
+
+            {/* Email */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>✉️ Email</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Check my email"</li>
+                <li>"Search emails for invoice"</li>
+              </ul>
+              <p style={{ margin: '8px 0 0', fontSize: '11px', opacity: 0.5 }}>Requires Microsoft sign-in</p>
+            </div>
+
+            {/* Recording */}
+            <div style={{ background: isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)', borderRadius: '8px', padding: '12px' }}>
+              <h4 style={{ margin: '0 0 8px', fontSize: '14px', display: 'flex', alignItems: 'center', gap: '6px' }}>🎙️ Recording</h4>
+              <ul style={{ margin: 0, padding: '0 0 0 16px', fontSize: '13px', opacity: 0.8, lineHeight: 1.8 }}>
+                <li>"Start recording"</li>
+                <li>"Show recordings"</li>
+              </ul>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '16px', padding: '12px', background: isDark ? 'rgba(99, 102, 241, 0.1)' : 'rgba(99, 102, 241, 0.05)', borderRadius: '8px' }}>
+            <p style={{ margin: 0, fontSize: '13px' }}>
+              💡 <strong>Tip:</strong> With AI enabled, you can speak naturally! The assistant understands context like "add that to my tasks" or "what's on my list?"
+            </p>
           </div>
         </div>
       )}
