@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import MicrosoftGraph from './microsoftGraph.js';
 import MeetingRecorder from './MeetingRecorder.jsx';
 import { processWithAI as processWithContextAI } from './aiService.js';
+import { parseTimeExpression, extractReminderContent, formatReminderTime } from './timeParser.js';
 
 // Helper function to get next occurrence of a weekday (0=Sunday, 1=Monday, etc.)
 const getNextWeekday = (targetDay) => {
@@ -68,35 +69,73 @@ const plugins = {
     name: 'Reminders',
     icon: '⏰',
     keywords: ['remind', 'reminder', 'alert', 'notify', 'don\'t forget'],
-    description: 'Set reminders',
+    description: 'Set reminders with natural language time parsing',
     execute: async (params) => {
-      const { action, content, time, supabase } = params;
+      const { action, content, time, rawInput, supabase } = params;
 
       if (action === 'create') {
         if (!content || !content.trim()) {
           return { success: false, message: "What should I remind you about?" };
         }
 
-        // Parse time from content (e.g., "in 30 minutes", "tomorrow", "at 3pm")
-        let remindAt = time || new Date(Date.now() + 3600000).toISOString(); // Default 1 hour
+        // Parse time from content using natural language parser
+        const textToParse = rawInput || content;
+        const { date: parsedDate, matched } = parseTimeExpression(textToParse);
+        
+        // Use parsed time, provided time, or default to 1 hour from now
+        let remindAt;
+        let reminderContent = content.trim();
+        let timeDescription = '';
+        
+        if (parsedDate) {
+          remindAt = parsedDate.toISOString();
+          // Clean up the reminder content by removing the time expression
+          if (matched && rawInput) {
+            reminderContent = extractReminderContent(rawInput, matched);
+            // Remove common prefixes like "remind me to"
+            reminderContent = reminderContent
+              .replace(/^(remind\s+me\s+to|remind\s+me|reminder|remind)\s*/i, '')
+              .trim();
+          }
+          timeDescription = formatReminderTime(parsedDate);
+        } else if (time) {
+          remindAt = new Date(time).toISOString();
+          timeDescription = formatReminderTime(new Date(time));
+        } else {
+          // Default: 1 hour from now
+          const defaultTime = new Date(Date.now() + 3600000);
+          remindAt = defaultTime.toISOString();
+          timeDescription = 'in 1 hour';
+        }
+
+        // Ensure we have meaningful content
+        if (!reminderContent) {
+          reminderContent = content.trim();
+        }
 
         if (supabase) {
           const { data, error } = await supabase
             .from('assistant_reminders')
             .insert({
-              content: content.trim(),
+              content: reminderContent,
               remind_at: remindAt,
               is_completed: false
             });
           if (error) throw error;
-          return { success: true, message: `⏰ Reminder set: "${content.trim()}"` };
+          return { 
+            success: true, 
+            message: `⏰ Reminder set for ${timeDescription}: "${reminderContent}"` 
+          };
         }
 
         // Fallback to localStorage
         const reminders = JSON.parse(localStorage.getItem('assistant_reminders') || '[]');
-        reminders.push({ id: Date.now(), content: content.trim(), remind_at: remindAt, is_completed: false });
+        reminders.push({ id: Date.now(), content: reminderContent, remind_at: remindAt, is_completed: false });
         localStorage.setItem('assistant_reminders', JSON.stringify(reminders));
-        return { success: true, message: `⏰ Reminder set: "${content.trim()}"` };
+        return { 
+          success: true, 
+          message: `⏰ Reminder set for ${timeDescription}: "${reminderContent}"` 
+        };
       }
 
       if (action === 'list') {
@@ -108,7 +147,16 @@ const plugins = {
             .order('remind_at', { ascending: true })
             .limit(10);
           if (error) throw error;
-          return { success: true, reminders: data };
+          
+          if (data && data.length > 0) {
+            // Format reminders with relative time
+            const formattedReminders = data.map(r => {
+              const timeStr = formatReminderTime(new Date(r.remind_at));
+              return { ...r, timeDescription: timeStr };
+            });
+            return { success: true, reminders: formattedReminders };
+          }
+          return { success: true, reminders: [] };
         }
         const reminders = JSON.parse(localStorage.getItem('assistant_reminders') || '[]');
         return { success: true, reminders: reminders.filter(r => !r.is_completed).slice(0, 10) };
@@ -507,15 +555,41 @@ const plugins = {
     keywords: ['text', 'sms', 'message', 'send text'],
     description: 'Send text messages via Twilio',
     execute: async (params) => {
-      const { action, to, body, phone, message, supabase } = params;
+      const { action, to, body, phone, message, contactName, supabase } = params;
 
       // Handle different param names
-      const phoneNumber = to || phone;
+      let phoneNumber = to || phone;
       const messageBody = body || message;
+
+      // If we have a contact name but no phone, look up the contact
+      if (contactName && !phoneNumber && supabase) {
+        try {
+          const { data: contact } = await supabase
+            .from('assistant_contacts')
+            .select('phone, name, nickname')
+            .or(`name.ilike.%${contactName}%,nickname.ilike.%${contactName}%`)
+            .limit(1)
+            .single();
+          
+          if (contact && contact.phone) {
+            phoneNumber = contact.phone;
+          } else {
+            return { 
+              success: false, 
+              message: `I couldn't find a contact named "${contactName}". Try adding them first: "add contact ${contactName} phone 555-123-4567"` 
+            };
+          }
+        } catch (e) {
+          return { 
+            success: false, 
+            message: `I couldn't find "${contactName}" in your contacts. Add them with: "add contact ${contactName} phone 555-123-4567"` 
+          };
+        }
+      }
 
       if (action === 'send' || (!action && phoneNumber)) {
         if (!phoneNumber) {
-          return { success: false, message: 'Who would you like to text? Please provide a phone number.' };
+          return { success: false, message: 'Who would you like to text? Please provide a phone number or contact name.' };
         }
         if (!messageBody) {
           return { success: false, message: 'What would you like to say?' };
@@ -567,9 +641,10 @@ const plugins = {
             }
           }
 
+          const displayName = contactName ? `${contactName} (${phoneNumber})` : phoneNumber;
           return {
             success: true,
-            message: `✅ Text sent to ${phoneNumber}: "${messageBody}"`,
+            message: `✅ Text sent to ${displayName}: "${messageBody}"`,
             data: data
           };
         } catch (error) {
@@ -609,7 +684,7 @@ const plugins = {
 
       return {
         success: true,
-        message: 'SMS is ready! Try: "text [phone number] [message]" or "show text history"'
+        message: 'SMS is ready! Try: "text [phone number] [message]", "text mom hello", or "show text history"'
       };
     }
   },
@@ -645,6 +720,192 @@ const plugins = {
         success: true,
         message: 'Click the 🎙️ button in the header to open the meeting recorder, or say "start recording".',
         openRecorder: true
+      };
+    }
+  },
+
+  contacts: {
+    name: 'Contacts',
+    icon: '👤',
+    keywords: ['contact', 'contacts', 'add contact', 'phone number', 'phone book', 'address book'],
+    description: 'Manage your contacts for quick access',
+    execute: async (params) => {
+      const { action, name, nickname, phone, email, supabase } = params;
+
+      if (action === 'add' || action === 'create') {
+        if (!name || !name.trim()) {
+          return { success: false, message: "What's the contact's name?" };
+        }
+
+        if (!phone && !email) {
+          return { success: false, message: `What's ${name}'s phone number or email?` };
+        }
+
+        const contact = {
+          name: name.trim(),
+          nickname: nickname?.trim() || null,
+          phone: phone?.trim() || null,
+          email: email?.trim() || null,
+          created_at: new Date().toISOString()
+        };
+
+        if (supabase) {
+          // Check if contact already exists
+          const { data: existing } = await supabase
+            .from('assistant_contacts')
+            .select('id')
+            .ilike('name', name.trim())
+            .limit(1);
+
+          if (existing && existing.length > 0) {
+            // Update existing contact
+            const { error } = await supabase
+              .from('assistant_contacts')
+              .update({ phone: contact.phone, email: contact.email, nickname: contact.nickname })
+              .eq('id', existing[0].id);
+            if (error) throw error;
+            return { success: true, message: `👤 Updated contact: ${name}` };
+          }
+
+          const { error } = await supabase
+            .from('assistant_contacts')
+            .insert(contact);
+          if (error) throw error;
+          
+          const details = [];
+          if (phone) details.push(`📱 ${phone}`);
+          if (email) details.push(`📧 ${email}`);
+          return { 
+            success: true, 
+            message: `👤 Contact added: ${name}\n${details.join('\n')}` 
+          };
+        }
+
+        // Fallback to localStorage
+        const contacts = JSON.parse(localStorage.getItem('assistant_contacts') || '[]');
+        const existingIndex = contacts.findIndex(c => c.name.toLowerCase() === name.trim().toLowerCase());
+        
+        if (existingIndex >= 0) {
+          contacts[existingIndex] = { ...contacts[existingIndex], ...contact };
+        } else {
+          contacts.push({ id: Date.now(), ...contact });
+        }
+        localStorage.setItem('assistant_contacts', JSON.stringify(contacts));
+        return { success: true, message: `👤 Contact saved: ${name}` };
+      }
+
+      if (action === 'list' || action === 'show') {
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_contacts')
+            .select('*')
+            .order('name', { ascending: true })
+            .limit(20);
+          if (error) throw error;
+          
+          if (!data || data.length === 0) {
+            return { success: true, message: 'No contacts yet. Add one with: "add contact Mom phone 555-123-4567"' };
+          }
+
+          const contactList = data.map(c => {
+            const info = c.phone || c.email || 'no contact info';
+            const nick = c.nickname ? ` (${c.nickname})` : '';
+            return `• ${c.name}${nick}: ${info}`;
+          }).join('\n');
+          
+          return { success: true, message: `Your contacts:\n${contactList}`, contacts: data };
+        }
+
+        const contacts = JSON.parse(localStorage.getItem('assistant_contacts') || '[]');
+        if (contacts.length === 0) {
+          return { success: true, message: 'No contacts yet. Add one with: "add contact Mom phone 555-123-4567"' };
+        }
+        const contactList = contacts.map(c => `• ${c.name}: ${c.phone || c.email || 'no info'}`).join('\n');
+        return { success: true, message: `Your contacts:\n${contactList}`, contacts };
+      }
+
+      if (action === 'find' || action === 'search') {
+        if (!name) {
+          return { success: false, message: 'Who are you looking for?' };
+        }
+
+        if (supabase) {
+          const { data, error } = await supabase
+            .from('assistant_contacts')
+            .select('*')
+            .or(`name.ilike.%${name}%,nickname.ilike.%${name}%`)
+            .limit(5);
+          if (error) throw error;
+
+          if (!data || data.length === 0) {
+            return { success: true, message: `No contacts found matching "${name}"` };
+          }
+
+          const contactList = data.map(c => {
+            const details = [];
+            if (c.phone) details.push(`📱 ${c.phone}`);
+            if (c.email) details.push(`📧 ${c.email}`);
+            const nick = c.nickname ? ` (${c.nickname})` : '';
+            return `${c.name}${nick}\n  ${details.join('  ')}`;
+          }).join('\n');
+
+          return { success: true, message: `Found:\n${contactList}`, contacts: data };
+        }
+
+        const contacts = JSON.parse(localStorage.getItem('assistant_contacts') || '[]');
+        const found = contacts.filter(c => 
+          c.name.toLowerCase().includes(name.toLowerCase()) ||
+          (c.nickname && c.nickname.toLowerCase().includes(name.toLowerCase()))
+        );
+        
+        if (found.length === 0) {
+          return { success: true, message: `No contacts found matching "${name}"` };
+        }
+        
+        const contactList = found.map(c => `• ${c.name}: ${c.phone || c.email || 'no info'}`).join('\n');
+        return { success: true, message: `Found:\n${contactList}`, contacts: found };
+      }
+
+      if (action === 'delete' || action === 'remove') {
+        if (!name) {
+          return { success: false, message: 'Which contact do you want to delete?' };
+        }
+
+        if (supabase) {
+          const { data, error: findError } = await supabase
+            .from('assistant_contacts')
+            .select('id, name')
+            .ilike('name', `%${name}%`)
+            .limit(1);
+
+          if (findError) throw findError;
+          if (!data || data.length === 0) {
+            return { success: false, message: `No contact found matching "${name}"` };
+          }
+
+          const { error } = await supabase
+            .from('assistant_contacts')
+            .delete()
+            .eq('id', data[0].id);
+          if (error) throw error;
+
+          return { success: true, message: `🗑️ Deleted contact: ${data[0].name}` };
+        }
+
+        const contacts = JSON.parse(localStorage.getItem('assistant_contacts') || '[]');
+        const index = contacts.findIndex(c => c.name.toLowerCase().includes(name.toLowerCase()));
+        if (index === -1) {
+          return { success: false, message: `No contact found matching "${name}"` };
+        }
+        const deletedName = contacts[index].name;
+        contacts.splice(index, 1);
+        localStorage.setItem('assistant_contacts', JSON.stringify(contacts));
+        return { success: true, message: `🗑️ Deleted contact: ${deletedName}` };
+      }
+
+      return {
+        success: true,
+        message: 'Contact commands:\n• "add contact John phone 555-1234"\n• "show my contacts"\n• "find contact Mom"\n• "delete contact John"'
       };
     }
   }
@@ -917,7 +1178,7 @@ export default function PersonalAssistant({
     const actionMap = {
       'note_create': { plugin: 'notes', action: 'create', paramKey: 'content' },
       'note_list': { plugin: 'notes', action: 'list' },
-      'reminder_create': { plugin: 'reminders', action: 'create', paramKey: 'content' },
+      'reminder_create': { plugin: 'reminders', action: 'create', paramKey: 'content', includeRawInput: true },
       'reminder_list': { plugin: 'reminders', action: 'list' },
       'task_create': { plugin: 'tasks', action: 'create', paramKey: 'content' },
       'task_list': { plugin: 'tasks', action: 'list' },
@@ -931,6 +1192,10 @@ export default function PersonalAssistant({
       'calendar_today': { plugin: 'calendar', action: 'today' },
       'email_check': { plugin: 'email', action: 'inbox' },
       'recording_start': { plugin: 'recording', action: 'start' },
+      'contact_add': { plugin: 'contacts', action: 'add' },
+      'contact_list': { plugin: 'contacts', action: 'list' },
+      'contact_find': { plugin: 'contacts', action: 'find' },
+      'contact_delete': { plugin: 'contacts', action: 'delete' },
     };
 
     const mapping = actionMap[aiResult.action];
@@ -946,6 +1211,11 @@ export default function PersonalAssistant({
         // Map the main param if needed
         if (mapping.paramKey && aiResult.params?.content) {
           pluginParams[mapping.paramKey] = aiResult.params.content;
+        }
+
+        // Include raw input for time parsing (e.g., reminders)
+        if (mapping.includeRawInput) {
+          pluginParams.rawInput = userInput;
         }
 
         const result = await plugins[mapping.plugin].execute(pluginParams);
@@ -1019,14 +1289,23 @@ export default function PersonalAssistant({
             if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('my reminder')) {
               const result = await plugin.execute({ action: 'list', supabase: supabaseClient });
               if (result.reminders && result.reminders.length > 0) {
-                const remindersList = result.reminders.map(r => `• ${r.content}`).join('\n');
+                const remindersList = result.reminders.map(r => {
+                  const timeStr = r.timeDescription || '';
+                  return timeStr ? `• ${r.content} (${timeStr})` : `• ${r.content}`;
+                }).join('\n');
                 return { message: `Your reminders:\n${remindersList}`, action: 'reminders', data: result };
               }
               return { message: "You don't have any active reminders.", action: 'reminders' };
             } else {
+              // Keep the full input for time parsing
               const content = userInput.replace(/^(remind|reminder|remind me|don't forget)[:\s]*/i, '').trim();
               if (content) {
-                const result = await plugin.execute({ action: 'create', content, supabase: supabaseClient });
+                const result = await plugin.execute({ 
+                  action: 'create', 
+                  content, 
+                  rawInput: userInput, // Pass full input for time parsing
+                  supabase: supabaseClient 
+                });
                 return { message: result.message, action: 'reminders', data: result };
               }
               return { message: "What should I remind you about?" };
@@ -1138,7 +1417,91 @@ export default function PersonalAssistant({
               return { message: result.message, action: 'text', data: result };
             }
 
-            return { message: "To send a text, say: text [phone number] [message]" };
+            // Try to extract contact name and message: "text mom hello there" or "text John Smith hi"
+            const contactTextMatch = userInput.match(/^(?:text|sms|message)\s+([a-zA-Z][a-zA-Z\s]*?)\s+(.+)$/i);
+            if (contactTextMatch) {
+              const contactName = contactTextMatch[1].trim();
+              const message = contactTextMatch[2].trim();
+              const result = await plugin.execute({
+                action: 'send',
+                contactName: contactName,
+                body: message,
+                supabase: supabaseClient
+              });
+              return { message: result.message, action: 'text', data: result };
+            }
+
+            return { message: "To send a text, say: text [phone number] [message] or text [contact name] [message]" };
+          }
+
+          if (key === 'contacts') {
+            // Show contacts
+            if (lowerInput.includes('show') || lowerInput.includes('list') || lowerInput.includes('my contact')) {
+              const result = await plugin.execute({ action: 'list', supabase: supabaseClient });
+              return { message: result.message, action: 'contacts', data: result };
+            }
+
+            // Find contact: "find contact John" or "who is John"
+            const findMatch = userInput.match(/(?:find|search|who is|look up)\s+(?:contact\s+)?(.+)/i);
+            if (findMatch) {
+              const name = findMatch[1].trim();
+              const result = await plugin.execute({ action: 'find', name, supabase: supabaseClient });
+              return { message: result.message, action: 'contacts', data: result };
+            }
+
+            // Delete contact: "delete contact John" or "remove contact John"
+            const deleteMatch = userInput.match(/(?:delete|remove)\s+contact\s+(.+)/i);
+            if (deleteMatch) {
+              const name = deleteMatch[1].trim();
+              const result = await plugin.execute({ action: 'delete', name, supabase: supabaseClient });
+              return { message: result.message, action: 'contacts', data: result };
+            }
+
+            // Add contact with various formats:
+            // "add contact John phone 555-1234"
+            // "add contact Mom phone 555-1234 email mom@email.com"
+            // "add contact John Smith nickname Johnny phone 555-1234"
+            const addMatch = userInput.match(/(?:add|create|save)\s+contact\s+(.+)/i);
+            if (addMatch) {
+              const contactInfo = addMatch[1];
+              
+              // Extract phone number
+              const phoneMatch = contactInfo.match(/(?:phone|number|cell|mobile)?\s*([\d\-\+\(\)\s]{7,})/i);
+              const phone = phoneMatch ? phoneMatch[1].trim() : null;
+              
+              // Extract email
+              const emailMatch = contactInfo.match(/(?:email\s+)?([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/i);
+              const email = emailMatch ? emailMatch[1].trim() : null;
+              
+              // Extract nickname
+              const nicknameMatch = contactInfo.match(/nickname\s+(\w+)/i);
+              const nickname = nicknameMatch ? nicknameMatch[1].trim() : null;
+              
+              // Extract name (everything before phone/email/nickname keywords)
+              let name = contactInfo
+                .replace(/(?:phone|number|cell|mobile)\s*[\d\-\+\(\)\s]+/gi, '')
+                .replace(/(?:email\s+)?[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi, '')
+                .replace(/nickname\s+\w+/gi, '')
+                .trim();
+              
+              if (!name) {
+                return { message: "What's the contact's name? Try: 'add contact John phone 555-1234'" };
+              }
+
+              const result = await plugin.execute({ 
+                action: 'add', 
+                name, 
+                nickname,
+                phone, 
+                email, 
+                supabase: supabaseClient 
+              });
+              return { message: result.message, action: 'contacts', data: result };
+            }
+
+            // Default help
+            const result = await plugin.execute({ supabase: supabaseClient });
+            return { message: result.message, action: 'contacts' };
           }
 
           if (key === 'calendar') {

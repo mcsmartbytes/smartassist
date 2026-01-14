@@ -112,6 +112,10 @@ Available actions and their params:
 - "calendar_today": {}
 - "email_check": {}
 - "recording_start": {}
+- "contact_add": { "name": "contact name", "phone": "phone number", "email": "email address", "nickname": "optional nickname" }
+- "contact_list": {}
+- "contact_find": { "name": "search query" }
+- "contact_delete": { "name": "contact name" }
 - "conversation": {} (for general chat, no action needed)
 
 USER'S CURRENT DATA:
